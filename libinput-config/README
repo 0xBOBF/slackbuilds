@@ -1,0 +1,16 @@
+libinput-config allows you to configure your inputs in case your 
+Wayland compositor doesn't have a certain config or has none.
+
+In order for the library to work, you need to create a config file
+under /etc/libinput.conf. You only need to put the options you're
+going to use. For all left out options, the system defaults will be
+used. If you already configured an option in your compositor, the
+compositor will take the priority unless you enable override with:
+
+  'override-compositor=enabled'
+
+In the /etc/libinput.conf file.
+
+See the example config file for a full list of settings that are 
+implemented.
+

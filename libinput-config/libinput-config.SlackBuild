@@ -77,7 +77,7 @@ find -L . \
   -o -perm 440 -o -perm 400 \) -exec chmod 644 {} \;
 
 # Apply patch to prevent running the install/uninstall scripts with meson
-# We will add compatible substitutes in out doinst.sh and douninst.sh sripts
+# We will add compatible substitutes in our doinst.sh and douninst.sh sripts
 patch -Np2 -i $CWD/libinput-config_remove_install_uninstall_scripts.patch
 
 mkdir build

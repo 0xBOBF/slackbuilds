@@ -80,7 +80,7 @@ find -L . \
 # We're going to try using the provided mach build system.
 # First we need to provide a MOZCONFIG.
 MOZOBJ="$(pwd)/obj"
-cat > ./MOZCONFIG << EOF
+cat > ./.mozconfig << EOF
 ac_add_options --prefix=/usr
 ac_add_options --libdir=/usr/lib${LIBDIRSUFFIX}
 ac_add_options --enable-application=js
@@ -103,7 +103,6 @@ ac_add_options --enable-tests
 ac_add_options --with-intl-api
 EOF
 
-export MOZCONFIG=./MOZCONFIG
 export MACH_USE_SYSTEM_PYTHON=1
 
 ./mach build

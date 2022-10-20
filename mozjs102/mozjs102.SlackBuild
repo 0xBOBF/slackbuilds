@@ -26,7 +26,7 @@ cd $(dirname $0) ; CWD=$(pwd)
 
 PRGNAM=mozjs102
 SRCNAM=firefox
-VERSION=${VERSION:-102.0.1}
+VERSION=${VERSION:-102.3.0}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_SBo}
 PKGTYPE=${PKGTYPE:-tgz}
@@ -76,10 +76,6 @@ find -L . \
   -o -perm 511 \) -exec chmod 755 {} \; -o \
  \( -perm 666 -o -perm 664 -o -perm 640 -o -perm 600 -o -perm 444 \
   -o -perm 440 -o -perm 400 \) -exec chmod 644 {} \;
-
-# Patch mozjs102 build to install ProfilingCategoryList.h.
-# https://hg.mozilla.org/integration/autoland/rev/eb2b21f037a5
-patch -Np1 -i $CWD/install_ProfilingCategoryList.h.patch
 
 # We're going to try using the provided mach build system.
 # First we need to provide a MOZCONFIG.

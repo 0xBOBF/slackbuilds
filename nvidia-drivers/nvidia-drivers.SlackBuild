@@ -1,0 +1,229 @@
+#!/bin/bash
+
+# Slackware build script for nvidia-drivers
+
+# Copyright 2022, Bob Funk, Winnipeg, Canada
+# All rights reserved.
+#
+# Redistribution and use of this script, with or without modification, is
+# permitted provided that the following conditions are met:
+#
+# 1. Redistributions of this script must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+#  THIS SOFTWARE IS PROVIDED BY THE AUTHOR "AS IS" AND ANY EXPRESS OR IMPLIED
+#  WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+#  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO
+#  EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+#  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+#  OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+#  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+#  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+#  ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# NOTE ABOUT THE BUILD METHOD:
+# This build uses NVIDIA's .run script to install their drivers. Instead of 
+# trying to redirect the script to install to a package build directory, it 
+# installs the drivers in an overlay and uses that to construct a package.
+#
+# Edited Dec 4, 2022 - Support building modules for ALL present kernels.
+
+cd $(dirname $0) ; CWD=$(pwd)
+
+PRGNAM=nvidia-drivers
+SRCNAM=NVIDIA-Linux-x86_64
+VERSION=${VERSION:-525.60.11}
+BUILD=${BUILD:-1}
+TAG=${TAG:-_0XBF}
+PKGTYPE=${PKGTYPE:-tgz}
+
+# Sanity checks:
+if [ ! -e "$CWD/${SRCNAM}-${VERSION}.run" ]; then
+  echo "${SRCNAM}-${VERSION}.run is missing."
+  echo "Please download a copy of ${SRCNAM}-${VERSION}.run from nvidia.com"
+  exit 1
+fi
+if [ ! -z "$(who -r | grep -o 'run-level 4')" ]; then
+  echo "You appear to be in run-level 4."
+  echo "The NVIDIA installer can't be run while Xorg or Wayland are running."
+  exit 1
+elif pgrep Xorg 1> /dev/null; then
+  echo "The NVIDIA installer can't be run while Xorg is running."
+  exit 1
+elif pgrep Xwayland 1> /dev/null; then
+  echo "The NVIDIA installer can't be run while Xwayland is running."
+  exit 1
+fi
+
+if [ -z "$ARCH" ]; then
+  case "$( uname -m )" in
+    i?86) ARCH=i586 ;;
+    arm*) ARCH=arm ;;
+       *) ARCH=$( uname -m ) ;;
+  esac
+fi
+
+if [ ! -z "${PRINT_PACKAGE_NAME}" ]; then
+  echo "$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE"
+  exit 0
+fi
+
+TMP=${TMP:-/tmp/SBo}
+PKG=$TMP/package-$PRGNAM
+OUTPUT=${OUTPUT:-/tmp}
+
+if [ "$ARCH" = "x86_64" ]; then
+  SLKCFLAGS="-O2 -fPIC"
+  LIBDIRSUFFIX="64"
+else
+  echo "Arch type '$ARCH' is not supported."
+  echo "Must be 'x86_64' to use this driver."
+  exit 1
+fi
+
+# Allow package to be built with UI=none. This will automatically
+# answer 'yes' to all questions. I.e. also installs 32bit compat, 
+# and xorg cofiguration steps:
+if [ "$UI" = "none" ]; then
+  NVOPTS="--no-questions --run-nvidia-xconfig --ui=none"
+  echo "Building NVIDIA drivers without the UI"
+  echo "Using options: $NVOPTS"
+else
+  echo "Building NVIDIA drivers with the UI"
+fi
+
+# Get a list of installed kernels so we can supply each with modules:
+KERNEL_LIST="${KERNEL_LIST:-$(ls /boot/vmlinuz-* | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | sort | uniq)}"
+
+set -e
+
+# Some directories for the overlay and chroot mount points:
+WORKDIR=$TMP/workdir-$PRGNAM
+CHROOT=$TMP/chroot-$PRGNAM
+SRCDIR=$TMP/srcdir-$PRGNAM
+
+# Initialize directories:
+rm -rf $PKG $WORKDIR $CHROOT $SRCDIR
+mkdir -p $TMP $PKG $OUTPUT $WORKDIR $CHROOT $SRCDIR
+cd $TMP
+
+# Copy the .run script into SRCDIR and set executable:
+cp -a $CWD/${SRCNAM}-${VERSION}.run ${SRCDIR}
+chmod +x ${SRCDIR}/${SRCNAM}-${VERSION}.run
+
+# Set up the overlayfs and bind mounts:
+mount -t overlay overlay -o lowerdir=/,upperdir=${PKG},workdir=${WORKDIR} ${CHROOT}
+mount --bind /proc ${CHROOT}/proc
+mount --bind /sys ${CHROOT}/sys
+mount --bind /dev ${CHROOT}/dev
+
+# Set trap to prevent leaving mounts if running the installer in chroot fails:
+_cleanup () {
+  if lsmod | grep -q nvidia_drm ; then
+    chroot ${CHROOT} modprobe -r nvidia_drm
+  fi
+  umount ${CHROOT}{/dev,/proc,/sys,}
+}
+trap "_cleanup" EXIT
+
+# First build everything, including modules for the running kernel:
+chroot ${CHROOT} ${SRCDIR}/${SRCNAM}-${VERSION}.run ${NVOPTS}
+
+# Now build modules for each installed kernel:
+for kernel in ${KERNEL_LIST}
+do
+  # Skip the running kernel, since we did that already:
+  if [ "$(uname -r)" != "${kernel}" ]; then
+    echo "Building kernel modules for version ${kernel}"
+    # Do these without the UI, since its all automatic anyway:
+    chroot ${CHROOT} ${SRCDIR}/${SRCNAM}-${VERSION}.run -k ${kernel} -K --no-questions --ui=none
+  fi
+done
+
+echo "Finished building NVIDIA drivers."
+echo "Cleaning up. This may take a few seconds..."
+
+# Clean up mounts:
+_cleanup
+
+rm -rf $WORKDIR $CHROOT $SRCDIR
+trap "" EXIT
+
+# Cleanup some uneeded bits:
+rm -rf $PKG/etc/ld.so.cache $PKG/tmp $PKG/var
+
+# Remove installer/uninstaller. This would defeat the purpose of packaging this for pkgtools:
+rm -f $PKG/usr/bin/nvidia-{uninstall,installer}
+
+# Remove all 0 byte files (these are blanking files created by the overlayfs):
+find ${PKG} -size 0 -exec rm {} +;
+
+# Handle xorg.conf:
+if [ -e "$PKG/etc/X11/xorg.conf" ]; then
+  mv $PKG/etc/X11/{xorg.conf,xorg.conf.new}
+  # Remove nvidia's backup. We will use new-config anyway:
+  rm -f $PKG/etc/X11/xorg.conf.backup
+fi
+
+mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION
+cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
+
+# Move docs to proper location:
+mv $PKG/usr/doc/NVIDIA* $PKG/usr/doc/$PRGNAM-$VERSION/
+
+# Make sure permissions are sane:
+find . \
+  \( -perm 777 -o -perm 775 -o -perm 711 -o -perm 555 -o -perm 511 \) \
+  -exec chmod 755 {} \+ -o \
+  \( -perm 666 -o -perm 664 -o -perm 600 -o -perm 444 -o -perm 440 -o -perm 400 \) \
+  -exec chmod 644 {} \+
+
+mkdir -p $PKG/install
+cat << EOF > $PKG/install/slack-desc
+              |-----handy-ruler------------------------------------------------------|
+nvidia-drivers: nvidia-drivers (NVIDIA Linux x86_64 Drivers)
+nvidia-drivers:
+nvidia-drivers: A packaging of NVIDIA's Linux drivers. This is for x86_64 only.
+nvidia-drivers:
+nvidia-drivers:
+nvidia-drivers:
+nvidia-drivers:
+nvidia-drivers:
+nvidia-drivers:
+nvidia-drivers: https://www.nvidia.com/en-us/drivers/unix/
+nvidia-drivers:
+EOF
+cat << EOF > $PKG/install/doinst.sh
+config() {
+  NEW="\$1"
+  OLD="\$(dirname \$NEW)/\$(basename \$NEW .new)"
+  # If there's no config file by that name, mv it over:
+  if [ ! -r \$OLD ]; then
+    mv \$NEW \$OLD
+  elif [ "\$(cat \$OLD | md5sum)" = "\$(cat \$NEW | md5sum)" ]; then
+    # toss the redundant copy
+    rm \$NEW
+  else
+    # Otherwise, we leave the .new copy for the admin to consider...
+    # And lets remind them too:
+    echo
+    echo "A new xorg.conf file is in this package."
+    echo "Please process it by running 'slackpkg new-config'."
+  fi
+}
+
+if [ -e etc/X11/xorg.conf.new ]; then
+  config etc/X11/xorg.conf.new
+fi
+
+if [ -x /usr/bin/update-desktop-database ]; then
+  /usr/bin/update-desktop-database -q usr/share/applications >/dev/null 2>&1
+fi
+echo 
+echo "NVIDIA drivers have been (re)installed. Please reboot for changes to take effect!"
+echo
+EOF
+
+cd $PKG
+/sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
